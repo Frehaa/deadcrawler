@@ -1,56 +1,44 @@
-// use hyper::{client::Client, body::HttpBody};
-// use hyper_tls::HttpsConnector;
+use http::Uri;
+use hyper::{client::Client, body::HttpBody};
+use hyper_tls::HttpsConnector;
 
+use std::env;
 use std::collections::HashSet;
 
-
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>>{
+async fn get_data(uri: Uri) -> Result<String, Box<dyn std::error::Error + Send + Sync>>{
+    let client = Client::new();
+
+    let connector = HttpsConnector::new();
+    let client = Client::builder().build::<_, hyper::Body>(connector);
+
+    let mut response = client.get(uri).await?;
+
+    let status = response.status();
+    let version = response.version();
+    let headers = response.headers();
+    let extensions = response.extensions();
+    println!("{:?}", response);
+
+    println!("Status {status} - version {version:?} - extensions {extensions:?}");
+    
+    for key in headers.keys() {
+        println!("headers[{key}] = {:?}", headers.get(key).unwrap());
+    }
+
+    let mut v = Vec::new();
+    while let Some(chunk) = response.body_mut().data().await {
+        v.push(chunk?);
+    }
+
+    Ok(String::from_utf8(v.concat())?)
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>>{
     // let mut args = env::args();
     // let address = args.nth(1).unwrap();
-
-    // if address.is_none() {
-    //     println!("Plz give HTTP address :(");
-    //     std::error::Error
-    //     return Err();
-    // }
-
-    // println!("The address is {address}");
-
-    // let client = Client::new();
-
-    // let uri = "https://www.itu.dk/".parse()?;
-    // USER_AGENT
-    // let mut request = 
-    //     Request::builder()
-    //     .method(Method::GET)
-    //     .uri(uri)
-    //     .header(USER_AGENT, "deadcrawler/0.1");
-    // println!("{:?}", request.body(()));
-
-    // let connector = HttpsConnector::new();
-    // let client = Client::builder().build::<_, hyper::Body>(connector);
-
-    // let mut response = client.get(uri).await?;
-
-    // let status = response.status();
-    // let version = response.version();
-    // let headers = response.headers();
-    // let extensions = response.extensions();
-    // println!("{:?}", response);
-
-    // println!("Status {status} - version {version:?} - extensions {extensions:?}");
-    
-    // for key in headers.keys() {
-    //     println!("headers[{key}] = {:?}", headers.get(key).unwrap());
-    // }
-
-    // let mut v = Vec::new();
-
-    // while let Some(chunk) = response.body_mut().data().await {
-    //     v.push(chunk?);
-    // }
-    // let full_body = String::from_utf8(v.concat())?;
+    // let uri = address.parse()?;
+    // let full_body = get_data(uri);
 
     let full_body = include_str!("itu.dk.txt");
 
@@ -64,22 +52,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>>{
     let mut curr_idx = 0;
     for (i, c) in full_body.chars().enumerate() {
         match (c, state) {
-            ('<', 0) => {
+            ('<', 0) => { // Start of tag
                 state = 1;
                 curr_idx = i;
             },
             ('>', 8) => {
                 panic!("Didn't expect end of tag in state 8");
             },
-            ('>', _) => {
+            ('>', _) => { // End of tag
                 state = 0;
             },
             ('a', 1) => {
-                if i == curr_idx + 1 {
-                    state = 2;
-                    a_tags_idx.push(curr_idx);
-                }
+                state = 2;
+                a_tags_idx.push(curr_idx);
             },
+            (_, 1) => { // Not a start 'a' tag
+                state = -1;
+            }
             ('h', 2) => state = 3,
             (_, 2) => (),
             ('r', 3) => state = 4,
@@ -114,11 +103,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>>{
     for link in links.iter() {
         println!("{}", link);
     }
-    for idx in a_tags_idx.iter() {
-        print!("{idx} ");
-        // println!("{}", String::from_iter(tag.iter()));
-    }
-    println!("");
+    // for idx in a_tags_idx.iter() {
+    //     print!("{idx} ");
+    //     // println!("{}", String::from_iter(tag.iter()));
+    // }
+    // println!("");
 
 
     // let re = Regex::new("href").unwrap();

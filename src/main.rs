@@ -5,7 +5,7 @@ use hyper_tls::HttpsConnector;
 use url::Url;
 
 use std::env;
-use std::collections::HashSet;
+use std::collections::{HashSet, HashMap};
 
 #[derive(Debug)]
 enum ResponseStatusCode {
@@ -109,10 +109,72 @@ fn consolidate_uri(address : &str, base : &Url) -> Uri {
     Uri::default()
 }
 
+struct DeadResults {
+    address : String,
+    status_code: ResponseStatusCode
+}
+
+fn report_results(results: DeadResults) {
+    match results.status_code {
+        ResponseStatusCode::NOT_FOUND => {
+            println!("{} was not found.", results.address);
+        },
+        ResponseStatusCode::OK => {
+            println!("Everything all right");
+        },
+        ResponseStatusCode::OTHER => {
+            println!("I don't know what happend for {}", results.address);
+        },
+    }
+
+}
+
 // TODO: Check for subdomains myself or not? Do I want to crawl over github if I find a link to it? Maybe I should instead make a separate crawl for subdomains. Or maybe just make it toggleable
 fn main() -> () { //Result<(), Box<dyn std::error::Error + Send + Sync>>{
     let result = parse_to_uri("https://github.com");
 
+    /* 
+    1. Take as input a string (needs at least one argument on command line or fails) 
+
+    2. Try to parse string as a URL and save it as the base URL (if fail the program halts with error)
+
+    3. Make HTTPS GET request for URL (try once and report error on fail. A fail
+    in this case is something which does not even give an error code)
+
+    4. Given the result of a page, if it is an error code we finish and report
+    it, and on success we save a key-value pair of the url and content, parse
+    the content for all links (a link is the href attribute in an <a> tag) and
+    save them.
+    
+    5. For each link, parse the link as a URL, either a relative path or
+    absolute. If the link is relative then combine it with the base from where
+    it was extracted from (For each URL we need to know all the links it found
+    and make the links proper URLs if they are relative by combining them). At
+    the end we should have a lot of new candidate URLs.
+    
+    6. For each proper URL, make an HTTPS GET request for the content, if the 
+    URL is in the same domain as the base URL then we will parse the content 
+    of the page for links like in step 4., if the URL is external we simply 
+    save the result code. 
+
+    7. Keep going until all links have been traversed. 
+
+    ### Another explanation:
+    
+    We have a domain and a queue of unvisited URLs. For each of these unvisited
+    URLs, we make an HTTPS GET request. The request will fail or return a
+    response, in the case of a fail we (TBD? retry? silently ignore?
+    diagnostics?), and in the case of a response we get a status code. For 404
+    (or similar?) we mark the URL as dead, for relocated we mark it as such, and
+    for success it depends on whether the current URL is part of the domain. If
+    it is not part of the domain we are examining then we just mark the status
+    code, if it part of the domain then we continue our crawl by traversing the
+    content of the response to find new URLs. If the URL is relative then we
+    need to combine it with the base URL of the request URL. All of the newfound
+    URLs are added to the queue if they have not already been visited, so we
+    also keep track of all URLs we have already visited. 
+    
+    */
     let uri = result.unwrap();
 
     println!("{:?}", uri.scheme_str());
@@ -124,6 +186,8 @@ fn main() -> () { //Result<(), Box<dyn std::error::Error + Send + Sync>>{
 
     return;
 
+    // 1. Take as input a string (needs at least one argument on command line or
+    // fails) 
     let mut args = env::args();
 
     let address = args.nth(1);
@@ -133,44 +197,101 @@ fn main() -> () { //Result<(), Box<dyn std::error::Error + Send + Sync>>{
     }
     let address = unsafe { address.unwrap_unchecked() };
 
-    let uri = parse_to_uri(&address);
-    if let Err(e) = uri {
+    // 2. Try to parse string as a URL and save it as the base URL (if fail the
+    // program halts with error)
+    let base_uri = parse_to_uri(&address);
+    if let Err(e) = base_uri {
         println!("Error: {}", e);
         return;
     }
 
-    let data = get_data(unsafe { uri.unwrap_unchecked() });
+    // 3. Make HTTPS GET request for URL (try once and report error on fail. A fail
+    // in this case is something which does not even give an error code)
+    let data = get_data(unsafe { base_uri.unwrap_unchecked() });
     if let Err(e) = data {
         println!("Something went wrong {}", e);
         return;
     }
     let data = unsafe { data.unwrap_unchecked() };
 
+    // 4. Given the result of a page, if it is an error code we finish and report
+    // it, and ...
     match data.statusCode {
         ResponseStatusCode::NOT_FOUND => {
-
+            let results = DeadResults{ 
+                address: uri.to_string(), 
+                status_code: data.statusCode
+            };
+            report_results(results);
+            return;
         },
         ResponseStatusCode::OK => {
-
+            // Continue
         },
         ResponseStatusCode::OTHER => {
-
+            let results = DeadResults{ 
+                address: uri.to_string(), 
+                status_code: data.statusCode
+            };
+            report_results(results);
+            return;
         }
     }
 
-    // println!("{address}");
-    // println!("{url:?}");
-    // println!("{:?}", &uri.path_and_query());
-    // println!("{:?}", uri.host());
-    // let parts = &uri.into_parts();
-    // println!("{:?}", parts);
-    // let full_body = get_data(uri);
 
+    // ... on success we save a key-value pair of the url and content, ... 
+    let mut address_to_content = HashMap::new();
+    address_to_content.insert(uri.to_string(), data);
 
-    // return;
+    // ...parse the content for all links (a link is the href attribute in an
+    // <a> tag) and save them.
+    let full_body = include_str!("itu.dk.txt"); // Placeholder 
+    // let full_body = data.body.unwrap();
 
-    let full_body = include_str!("itu.dk.txt");
+    let mut links = get_links(full_body);
 
+    // 5. For each link, parse the link as a URL, either a relative path or
+    // absolute. If the link is relative then combine it with the base from where
+    // it was extracted from (For each URL we need to know all the links it found
+    // and make the links proper URLs if they are relative by combining them). At
+    // the end we should have a lot of new candidate URLs.
+    let mut candidate_urls = Vec::new();
+    for link in links {
+        let mut result_link = link;
+        if is_relative_path_link(link) {
+            result_link = combine_links(base_uri, link);
+        } else {
+            result_link = result_link;
+        }
+        candidate_urls.push(result_link);
+    }
+
+    // 6. For each proper URL, make an HTTPS GET request for the content, if the 
+    // URL is in the same domain as the base URL then we will parse the content 
+    // of the page for links like in step 4., if the URL is external we simply 
+    // save the result code. 
+
+    // 7. Keep going until all links have been traversed. 
+}
+
+fn combine_links(base_uri: Result<Uri, &str>, link: Link) -> Link {
+    todo!()
+}
+
+fn is_relative_path_link(link: Link) -> bool {
+    todo!()
+}
+
+struct Link {
+    address: String
+}
+
+fn get_links(full_body: &str) -> Vec<Link> { // To be updated. Right now ignores the data
+    let mut result = Vec::new();
+
+    // Might be an easy regex for this since double-quote (") characters are not allowed in a URI
+    // https://www.ietf.org/rfc/rfc2396.txt (Just skimmed, might be wrong)
+    // Candidate regex (the group would be the link):    <a .*href="(.*)">
     let mut state = 0;
 
     let mut atags = Vec::new();
@@ -234,37 +355,7 @@ fn main() -> () { //Result<(), Box<dyn std::error::Error + Send + Sync>>{
         }
     }
 
-    println!("Number of a's {}", &atags.len());
-    for atag in atags.iter() {
-        println!("{:?}", atag);
-    }
-
-
-    // for idx in a_tags_idx.iter() {
-    //     print!("{idx} ");
-    //     // println!("{}", String::from_iter(tag.iter()));
-    // }
-    // println!("");
-
-
-    // let re = Regex::new("href").unwrap();
-    // println!("{}", re.is_match(&full_body));
-
-    // for cap in re.captures_iter(&full_body) {
-    //     println!("{:?}", cap);
-    // }
-
-    
-
-    // let links = full_body?.matches(|x| { })
-
-    // println!("{}", full_body);
-
-    // response.
-    
-    // let r = response.poll();
-
-
+    return result;
 }
 
 #[cfg(test)]

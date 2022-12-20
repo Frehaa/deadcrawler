@@ -129,63 +129,53 @@ fn report_results(results: DeadResults) {
 
 }
 
+/* 
+1. Take as input a string (needs at least one argument on command line or fails) 
+
+2. Try to parse string as a URL and save it as the base URL (if fail the program halts with error)
+
+3. Make HTTPS GET request for URL (try once and report error on fail. A fail
+in this case is something which does not even give an error code)
+
+4. Given the result of a page, if it is an error code we finish and report
+it, and on success we save a key-value pair of the url and content, parse
+the content for all links (a link is the href attribute in an <a> tag) and
+save them.
+
+5. For each link, parse the link as a URL, either a relative path or
+absolute. If the link is relative then combine it with the base from where
+it was extracted from (For each URL we need to know all the links it found
+and make the links proper URLs if they are relative by combining them). At
+the end we should have a lot of new candidate URLs.
+
+6. For each proper URL, make an HTTPS GET request for the content, if the 
+URL is in the same domain as the base URL then we will parse the content 
+of the page for links like in step 4., if the URL is external we simply 
+save the result code. 
+
+7. Keep going until all links have been traversed. 
+
+### Another explanation:
+
+We have a domain and a queue of unvisited URLs. For each of these unvisited
+URLs, we make an HTTPS GET request. The request will fail or return a
+response, in the case of a fail we (TBD? retry? silently ignore?
+diagnostics?), and in the case of a response we get a status code. For 404
+(or similar?) we mark the URL as dead, for relocated we mark it as such, and
+for success it depends on whether the current URL is part of the domain. If
+it is not part of the domain we are examining then we just mark the status
+code, if it part of the domain then we continue our crawl by traversing the
+content of the response to find new URLs. If the URL is relative then we
+need to combine it with the base URL of the request URL. All of the newfound
+URLs are added to the queue if they have not already been visited, so we
+also keep track of all URLs we have already visited. 
+*/
+
 // TODO: Check for subdomains myself or not? Do I want to crawl over github if I find a link to it? Maybe I should instead make a separate crawl for subdomains. Or maybe just make it toggleable
 fn main() -> () { //Result<(), Box<dyn std::error::Error + Send + Sync>>{
-    let result = parse_to_uri("https://github.com");
-
-    /* 
-    1. Take as input a string (needs at least one argument on command line or fails) 
-
-    2. Try to parse string as a URL and save it as the base URL (if fail the program halts with error)
-
-    3. Make HTTPS GET request for URL (try once and report error on fail. A fail
-    in this case is something which does not even give an error code)
-
-    4. Given the result of a page, if it is an error code we finish and report
-    it, and on success we save a key-value pair of the url and content, parse
-    the content for all links (a link is the href attribute in an <a> tag) and
-    save them.
-    
-    5. For each link, parse the link as a URL, either a relative path or
-    absolute. If the link is relative then combine it with the base from where
-    it was extracted from (For each URL we need to know all the links it found
-    and make the links proper URLs if they are relative by combining them). At
-    the end we should have a lot of new candidate URLs.
-    
-    6. For each proper URL, make an HTTPS GET request for the content, if the 
-    URL is in the same domain as the base URL then we will parse the content 
-    of the page for links like in step 4., if the URL is external we simply 
-    save the result code. 
-
-    7. Keep going until all links have been traversed. 
-
-    ### Another explanation:
-    
-    We have a domain and a queue of unvisited URLs. For each of these unvisited
-    URLs, we make an HTTPS GET request. The request will fail or return a
-    response, in the case of a fail we (TBD? retry? silently ignore?
-    diagnostics?), and in the case of a response we get a status code. For 404
-    (or similar?) we mark the URL as dead, for relocated we mark it as such, and
-    for success it depends on whether the current URL is part of the domain. If
-    it is not part of the domain we are examining then we just mark the status
-    code, if it part of the domain then we continue our crawl by traversing the
-    content of the response to find new URLs. If the URL is relative then we
-    need to combine it with the base URL of the request URL. All of the newfound
-    URLs are added to the queue if they have not already been visited, so we
-    also keep track of all URLs we have already visited. 
-    
-    */
-    let uri = result.unwrap();
-
-    println!("{:?}", uri.scheme_str());
-    println!("{:?}", uri.path());
-    println!("{:?}", uri.query());
-    println!("{:?}", uri.host());
-
-
-
     return;
 
+    let result = parse_to_uri("https://github.com");
     // 1. Take as input a string (needs at least one argument on command line or
     // fails) 
     let mut args = env::args();
@@ -204,74 +194,99 @@ fn main() -> () { //Result<(), Box<dyn std::error::Error + Send + Sync>>{
         println!("Error: {}", e);
         return;
     }
+    
+    let mut uris_to_parse = Vec::new();
+    uris_to_parse.push(unsafe { base_uri.unwrap_unchecked() });
+    // uri_to_parse.pop()
 
-    // 3. Make HTTPS GET request for URL (try once and report error on fail. A fail
-    // in this case is something which does not even give an error code)
-    let data = get_data(unsafe { base_uri.unwrap_unchecked() });
-    if let Err(e) = data {
-        println!("Something went wrong {}", e);
-        return;
-    }
-    let data = unsafe { data.unwrap_unchecked() };
+    while !uris_to_parse.is_empty() {
+        let uri = uris_to_parse.pop().unwrap();
 
-    // 4. Given the result of a page, if it is an error code we finish and report
-    // it, and ...
-    match data.statusCode {
-        ResponseStatusCode::NOT_FOUND => {
-            let results = DeadResults{ 
-                address: uri.to_string(), 
-                status_code: data.statusCode
-            };
-            report_results(results);
-            return;
-        },
-        ResponseStatusCode::OK => {
-            // Continue
-        },
-        ResponseStatusCode::OTHER => {
-            let results = DeadResults{ 
-                address: uri.to_string(), 
-                status_code: data.statusCode
-            };
-            report_results(results);
+        // 3. Make HTTPS GET request for URL (try once and report error on fail. A fail
+        // in this case is something which does not even give an error code)
+        let data = get_data(unsafe { base_uri.unwrap_unchecked() });
+        if let Err(e) = data {
+            println!("Something went wrong {}", e);
             return;
         }
-    }
+        let data = unsafe { data.unwrap_unchecked() };
 
-
-    // ... on success we save a key-value pair of the url and content, ... 
-    let mut address_to_content = HashMap::new();
-    address_to_content.insert(uri.to_string(), data);
-
-    // ...parse the content for all links (a link is the href attribute in an
-    // <a> tag) and save them.
-    let full_body = include_str!("itu.dk.txt"); // Placeholder 
-    // let full_body = data.body.unwrap();
-
-    let mut links = get_links(full_body);
-
-    // 5. For each link, parse the link as a URL, either a relative path or
-    // absolute. If the link is relative then combine it with the base from where
-    // it was extracted from (For each URL we need to know all the links it found
-    // and make the links proper URLs if they are relative by combining them). At
-    // the end we should have a lot of new candidate URLs.
-    let mut candidate_urls = Vec::new();
-    for link in links {
-        let mut result_link = link;
-        if is_relative_path_link(link) {
-            result_link = combine_links(base_uri, link);
-        } else {
-            result_link = result_link;
+        // 4. Given the result of a page, if it is an error code we finish and report
+        // it, and ...
+        match data.statusCode {
+            ResponseStatusCode::NOT_FOUND => {
+                let results = DeadResults{ 
+                    address: uri.to_string(), 
+                    status_code: data.statusCode
+                };
+                report_results(results);
+                continue;
+            },
+            ResponseStatusCode::OK => {
+                // Continue
+            },
+            ResponseStatusCode::OTHER => {
+                let results = DeadResults{ 
+                    address: uri.to_string(), 
+                    status_code: data.statusCode
+                };
+                report_results(results);
+                continue;
+            }
         }
-        candidate_urls.push(result_link);
+
+
+        // ... on success we save a key-value pair of the url and content, ... 
+        let mut address_to_content = HashMap::new();
+        address_to_content.insert(uri.to_string(), data);
+
+        // ...parse the content for all links (a link is the href attribute in an
+        // <a> tag) and save them.
+        let full_body = include_str!("itu.dk.txt"); // Placeholder 
+        // let full_body = data.body.unwrap();
+
+        let mut links = get_links(full_body);
+
+        // 5. For each link, parse the link as a URL, either a relative path or
+        // absolute. If the link is relative then combine it with the base from where
+        // it was extracted from (For each URL we need to know all the links it found
+        // and make the links proper URLs if they are relative by combining them). At
+        // the end we should have a lot of new candidate URLs.
+        let mut candidate_urls = Vec::new();
+        for link in links {
+            let mut result_link = link;
+            if is_relative_path_link(link) {
+                result_link = combine_links(base_uri, link);
+            } else {
+                result_link = result_link;
+            }
+            candidate_urls.push(result_link);
+        }
+
+        // 6. For each proper URL, make an HTTPS GET request for the content, if the 
+        // URL is in the same domain as the base URL then we will parse the content 
+        // of the page for links like in step 4., if the URL is external we simply 
+        // save the result code. 
+        for url in candidate_urls {
+            let address = &url.address;
+            if address_to_content.contains_key(address) {
+                let uri = parse_to_uri(address);
+                match uri {
+                    Ok(v) => uris_to_parse.push(v),
+                    Err(e) => {
+                        // Ignore???
+                        println!("Failed to parse candidate url {address} as valid uri. Error: {e}");
+                    }
+                }
+            }
+        }
+
+        // 7. Keep going until all links have been traversed. 
     }
 
-    // 6. For each proper URL, make an HTTPS GET request for the content, if the 
-    // URL is in the same domain as the base URL then we will parse the content 
-    // of the page for links like in step 4., if the URL is external we simply 
-    // save the result code. 
+    
 
-    // 7. Keep going until all links have been traversed. 
+
 }
 
 fn combine_links(base_uri: Result<Uri, &str>, link: Link) -> Link {

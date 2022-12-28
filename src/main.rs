@@ -1,3 +1,4 @@
+#![allow(unused)]
 use http::uri::Scheme;
 use http::{Uri, Error, StatusCode};
 use hyper::{client::Client, body::HttpBody};
@@ -8,6 +9,7 @@ use std::env;
 use std::collections::{HashSet, HashMap};
 
 #[derive(Debug)]
+#[allow(non_camel_case_types)]
 enum ResponseStatusCode {
     NOT_FOUND,
     OK,
@@ -16,7 +18,7 @@ enum ResponseStatusCode {
 
 #[derive(Debug)]
 struct ResponseData {
-    statusCode : ResponseStatusCode,
+    status_code : ResponseStatusCode,
     body : Option<String>
 }
 
@@ -38,7 +40,7 @@ async fn get_data(uri: Uri) -> Result<ResponseData, Box<dyn std::error::Error + 
 
     match status {
         StatusCode::NOT_FOUND => {
-            Ok(ResponseData { statusCode: ResponseStatusCode::NOT_FOUND, body: None })
+            Ok(ResponseData { status_code: ResponseStatusCode::NOT_FOUND, body: None })
         },
         StatusCode::OK => {
             let mut v = Vec::new();
@@ -46,12 +48,12 @@ async fn get_data(uri: Uri) -> Result<ResponseData, Box<dyn std::error::Error + 
                 v.push(chunk?);
             }
             Ok(ResponseData { 
-                statusCode: ResponseStatusCode::OK, 
+                status_code: ResponseStatusCode::OK, 
                 body: Some(String::from_utf8(v.concat())?) 
             })
         },
         _ => {
-            Ok(ResponseData { statusCode: ResponseStatusCode::OTHER, body: None })
+            Ok(ResponseData { status_code: ResponseStatusCode::OTHER, body: None })
         }
 
 
@@ -173,9 +175,6 @@ also keep track of all URLs we have already visited.
 
 // TODO: Check for subdomains myself or not? Do I want to crawl over github if I find a link to it? Maybe I should instead make a separate crawl for subdomains. Or maybe just make it toggleable
 fn main() -> () { //Result<(), Box<dyn std::error::Error + Send + Sync>>{
-    return;
-
-    let result = parse_to_uri("https://github.com");
     // 1. Take as input a string (needs at least one argument on command line or
     // fails) 
     let mut args = env::args();
@@ -194,17 +193,20 @@ fn main() -> () { //Result<(), Box<dyn std::error::Error + Send + Sync>>{
         println!("Error: {}", e);
         return;
     }
+    let base_uri = unsafe { base_uri.unwrap_unchecked() };
     
     let mut uris_to_parse = Vec::new();
-    uris_to_parse.push(unsafe { base_uri.unwrap_unchecked() });
+    uris_to_parse.push(base_uri.clone());
     // uri_to_parse.pop()
 
     while !uris_to_parse.is_empty() {
-        let uri = uris_to_parse.pop().unwrap();
+        let uri = uris_to_parse.pop().unwrap(); // Safe due to loop condition
+
+        let address_string = uri.to_string();
 
         // 3. Make HTTPS GET request for URL (try once and report error on fail. A fail
         // in this case is something which does not even give an error code)
-        let data = get_data(unsafe { base_uri.unwrap_unchecked() });
+        let data = get_data(uri);
         if let Err(e) = data {
             println!("Something went wrong {}", e);
             return;
@@ -213,11 +215,11 @@ fn main() -> () { //Result<(), Box<dyn std::error::Error + Send + Sync>>{
 
         // 4. Given the result of a page, if it is an error code we finish and report
         // it, and ...
-        match data.statusCode {
+        match data.status_code {
             ResponseStatusCode::NOT_FOUND => {
                 let results = DeadResults{ 
-                    address: uri.to_string(), 
-                    status_code: data.statusCode
+                    address: address_string,
+                    status_code: data.status_code
                 };
                 report_results(results);
                 continue;
@@ -227,8 +229,8 @@ fn main() -> () { //Result<(), Box<dyn std::error::Error + Send + Sync>>{
             },
             ResponseStatusCode::OTHER => {
                 let results = DeadResults{ 
-                    address: uri.to_string(), 
-                    status_code: data.statusCode
+                    address: address_string,
+                    status_code: data.status_code
                 };
                 report_results(results);
                 continue;
@@ -238,7 +240,7 @@ fn main() -> () { //Result<(), Box<dyn std::error::Error + Send + Sync>>{
 
         // ... on success we save a key-value pair of the url and content, ... 
         let mut address_to_content = HashMap::new();
-        address_to_content.insert(uri.to_string(), data);
+        address_to_content.insert(address_string, data);
 
         // ...parse the content for all links (a link is the href attribute in an
         // <a> tag) and save them.
@@ -255,8 +257,8 @@ fn main() -> () { //Result<(), Box<dyn std::error::Error + Send + Sync>>{
         let mut candidate_urls = Vec::new();
         for link in links {
             let mut result_link = link;
-            if is_relative_path_link(link) {
-                result_link = combine_links(base_uri, link);
+            if is_relative_path_link(&result_link) {
+                result_link = combine_links(&base_uri, &result_link);
             } else {
                 result_link = result_link;
             }
@@ -289,11 +291,11 @@ fn main() -> () { //Result<(), Box<dyn std::error::Error + Send + Sync>>{
 
 }
 
-fn combine_links(base_uri: Result<Uri, &str>, link: Link) -> Link {
+fn combine_links(base_uri: &Uri, link: &Link) -> Link {
     todo!()
 }
 
-fn is_relative_path_link(link: Link) -> bool {
+fn is_relative_path_link(link: &Link) -> bool {
     todo!()
 }
 
